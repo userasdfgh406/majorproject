@@ -1,4 +1,0 @@
-opencv-python
-mediapipe
-cvzone
-pyserial

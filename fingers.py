@@ -44,18 +44,13 @@ def parse_args():
     parser.add_argument("--port", default=PORT, help="Serial port for the VEX Brain")
     parser.add_argument("--baud", type=int, default=BAUD_RATE, help="Serial baud rate")
     parser.add_argument("--camera", type=int, default=CAMERA_INDEX, help="Webcam index")
-    parser.add_argument("--dry-run", action="store_true", help="Run without sending serial commands")
     parser.add_argument("--width", type=int, default=DEFAULT_WINDOW_WIDTH, help="Window width")
     parser.add_argument("--height", type=int, default=DEFAULT_WINDOW_HEIGHT, help="Window height")
     parser.add_argument("--fullscreen", action="store_true", help="Open the window fullscreen")
     return parser.parse_args()
 
 
-def connect_serial(port, baud_rate, dry_run):
-    if dry_run:
-        print("Dry-run mode: serial commands will be printed only.")
-        return None
-
+def connect_serial(port, baud_rate):
     try:
         ser = serial.Serial(port, baud_rate, timeout=1)
         time.sleep(2)
@@ -72,12 +67,8 @@ def classify_gesture(fingers):
     return pattern, gesture_name
 
 
-def send_command(ser, command, dry_run=False):
+def send_command(ser, command):
     if command is None:
-        return
-
-    if dry_run:
-        print(f"[dry-run] Sent command: {command}")
         return
 
     if ser is None:
@@ -113,7 +104,7 @@ def update_unlock(pattern, sequence_index, candidate_unlock_pattern, unlock_fram
 
 
 def draw_status_panel(img, unlocked, pattern, gesture_name, last_sent_label, last_sent_command,
-                      sequence_index, unlock_frames, dry_run):
+                      sequence_index, unlock_frames):
     height, width = img.shape[:2]
     panel_left = max(0, width - 360)
     cv2.rectangle(img, (panel_left, 0), (width, height), (20, 25, 32), cv2.FILLED)
@@ -125,8 +116,8 @@ def draw_status_panel(img, unlocked, pattern, gesture_name, last_sent_label, las
                 cv2.FONT_HERSHEY_SIMPLEX, 0.85, (255, 255, 255), 2)
     cv2.putText(img, status, (panel_left + 24, 78),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.75, status_color, 2)
-    cv2.putText(img, "mode: dry-run" if dry_run else "mode: serial",
-                (panel_left + 24, 112), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (190, 205, 215), 1)
+    cv2.putText(img, "mode: serial", (panel_left + 24, 112),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (190, 205, 215), 1)
     cv2.putText(img, f"pattern: {pattern or '-----'}", (panel_left + 24, 145),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.58, (255, 255, 255), 1)
     cv2.putText(img, f"gesture: {gesture_name}", (panel_left + 24, 174),
@@ -166,13 +157,13 @@ def draw_status_panel(img, unlocked, pattern, gesture_name, last_sent_label, las
 
 def main():
     args = parse_args()
-    ser = connect_serial(args.port, args.baud, args.dry_run)
+    ser = connect_serial(args.port, args.baud)
     cap = cv2.VideoCapture(args.camera)
 
     if not cap.isOpened():
         print(f"Could not open camera {args.camera}.")
         print("Try a different camera index, for example:")
-        print("  python fingers.py --dry-run --camera 1")
+        print("  python fingers.py --camera 1")
         return
 
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
@@ -198,7 +189,7 @@ def main():
     candidate_unlock_pattern = None
     unlock_frames = 0
 
-    send_command(ser, "LOCK", args.dry_run)
+    send_command(ser, "LOCK")
 
     while True:
         success, img = cap.read()
@@ -219,7 +210,7 @@ def main():
                 )
                 if sequence_index >= len(UNLOCK_SEQUENCE):
                     unlocked = True
-                    send_command(ser, "UNLOCK", args.dry_run)
+                    send_command(ser, "UNLOCK")
                     last_sent_command = "UNLOCK"
                     last_sent_label = "UNLOCKED"
 
@@ -234,19 +225,19 @@ def main():
                     candidate_frames = 1
 
                 if candidate_frames >= STABLE_FRAMES_REQUIRED and pattern != last_sent_command:
-                    send_command(ser, pattern, args.dry_run)
+                    send_command(ser, pattern)
                     last_sent_command = pattern
                     last_sent_label = gesture_name
 
             draw_status_panel(img, unlocked, pattern, gesture_name, last_sent_label, last_sent_command,
-                              sequence_index, unlock_frames, args.dry_run)
+                              sequence_index, unlock_frames)
         else:
             candidate_command = None
             candidate_frames = 0
             candidate_unlock_pattern = None
             unlock_frames = 0
             draw_status_panel(img, unlocked, None, "NO HAND", last_sent_label, last_sent_command,
-                              sequence_index, unlock_frames, args.dry_run)
+                              sequence_index, unlock_frames)
 
         cv2.imshow(window_name, img)
         key = cv2.waitKey(1) & 0xFF
@@ -256,7 +247,7 @@ def main():
         if key == ord("l"):
             unlocked = False
             sequence_index, candidate_unlock_pattern, unlock_frames = reset_unlock()
-            send_command(ser, "LOCK", args.dry_run)
+            send_command(ser, "LOCK")
             last_sent_command = "LOCK"
             last_sent_label = "LOCKED"
         if key == ord("r"):
@@ -265,7 +256,7 @@ def main():
     cap.release()
     cv2.destroyAllWindows()
     if ser is not None:
-        send_command(ser, "LOCK", args.dry_run)
+        send_command(ser, "LOCK")
         ser.close()
 
 
