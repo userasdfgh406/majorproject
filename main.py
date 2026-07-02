@@ -5,15 +5,29 @@ import sys
 brain = Brain()
 motor_thumb = Motor(Ports.PORT1, GearSetting.RATIO_18_1, False)
 motor_index = Motor(Ports.PORT2, GearSetting.RATIO_18_1, False)
-motor_middle = Motor(Ports.PORT3, GearSetting.RATIO_18_1, False)
-motor_ring = Motor(Ports.PORT4, GearSetting.RATIO_18_1, False)
-motor_pinky = Motor(Ports.PORT5, GearSetting.RATIO_18_1, False)
+# Ports 4 and 5 use the same direction so they bend the same way.
+motor_middle = Motor(Ports.PORT3, GearSetting.RATIO_18_1, False )
+motor_ring = Motor(Ports.PORT4, GearSetting.RATIO_18_1, True)
+motor_pinky = Motor(Ports.PORT5, GearSetting.RATIO_18_1, True)
 
 motors = [motor_thumb, motor_index, motor_middle, motor_ring, motor_pinky]
 
+# Shared motor settings keep every finger moving at the same speed.
 MOTOR_SPEED = 25
-MOTOR_POSITION_UP = 0
-MOTOR_POSITION_DOWN = 2250
+MOTOR_POSITION_UP_ROTATIONS_BY_FINGER = [
+    -0.50,    # Port 1 thumb
+    0,    # Port 2 index
+    0,    # Port 3 middle
+    0,    # Port 4 ring
+    -0.50,    # Port 5 pinky
+]
+MOTOR_POSITION_DOWN_ROTATIONS_BY_FINGER = [
+    6.50, # Port 1 thumb
+    9.0, # Port 2 index
+    7.30, # Port 3 middle
+    6.80,  # Port 4 ring
+    7.80,  # Port 5 pinky
+]
 MOTOR_HOLD_MS = 250
 last_command = "NONE"
 is_unlocked = False
@@ -29,7 +43,7 @@ def show_screen(line1, line2=""):
 
 
 def is_valid_pattern(text):
-    if len(text) != 5:
+    if len(text) != 5: # Valid commands are five binary digits, one for each finger.
         return False
 
     for char in text:
@@ -39,11 +53,11 @@ def is_valid_pattern(text):
     return True
 
 
-def move_finger(finger_motor, finger_state):
+def move_finger(finger_motor, finger_state, up_rotations, down_rotations):    # "1" opens a finger and "0" closes it to match the camera pattern.
     if finger_state == "1":
-        finger_motor.spin_to_position(MOTOR_POSITION_UP, DEGREES, False)
+        finger_motor.spin_to_position(up_rotations, TURNS, False)
     elif finger_state == "0":
-        finger_motor.spin_to_position(MOTOR_POSITION_DOWN, DEGREES, False)
+        finger_motor.spin_to_position(down_rotations, TURNS, False)
 
 
 def wait_for_motors(timeout_ms=3000):
@@ -67,11 +81,16 @@ def wait_for_motors(timeout_ms=3000):
 def apply_pattern(pattern):
     global last_command
 
-    # Start moving all motors simultaneously (non-blocking trigger)
+    # Start every finger first so the hand changes shape as one motion.
     for index in range(5):
-        move_finger(motors[index], pattern[index])
+        move_finger(
+            motors[index],
+            pattern[index],
+            MOTOR_POSITION_UP_ROTATIONS_BY_FINGER[index],
+            MOTOR_POSITION_DOWN_ROTATIONS_BY_FINGER[index],
+        )
 
-    # Wait until all motors physically reach their targets
+    # Hold the next command until the current gesture has finished moving.
     wait_for_motors()
 
     wait(MOTOR_HOLD_MS, MSEC)
@@ -93,6 +112,7 @@ def lock_receiver():
 
 
 def read_line_from_stdin():
+    # The PC sends one command per line over the serial stdin connection.
     try:
         line = sys.stdin.readline()
     except Exception as error:
@@ -106,10 +126,11 @@ def read_line_from_stdin():
 
 
 def main():
+    # Put every motor into a known starting state before accepting commands.
     for motor in motors:
         motor.set_stopping(HOLD)
         motor.set_velocity(MOTOR_SPEED, PERCENT)
-        motor.set_position(0, DEGREES)
+        motor.set_position(0, TURNS)
 
     show_screen("Security lock", "Do gesture code")
     print("Receiver ready. Send commands like 01000")
@@ -118,6 +139,7 @@ def main():
     print("Reading from sys.stdin")
 
     while True:
+        # Keep polling stdin so the robot can react as soon as the PC sends data.
         text = read_line_from_stdin()
 
         if text is None:

@@ -2,6 +2,7 @@ import argparse
 import time
 
 try:
+    # These packages are only needed on the PC that runs the camera controller.
     import cv2
     from cvzone.HandTrackingModule import HandDetector
     import serial
@@ -25,13 +26,17 @@ GESTURE_MAP = {
     "00000": "FIST",
     "11111": "OPEN",
     "01000": "INDEX",
+    "00100": "MIDDLE",
+    "00010": "RING",
     "01100": "PEACE",
     "10000": "THUMB",
     "00001": "PINKY",
     "11000": "L_SHAPE",
 }
+FINGER_LABELS = ["T", "I", "M", "R", "P"]
 
 UNLOCK_SEQUENCE = [
+    # The robot only unlocks after these gestures are held in this exact order.
     ("OPEN", "11111"),
     ("FIST", "00000"),
     ("PEACE", "01100"),
@@ -52,6 +57,7 @@ def parse_args():
 
 def connect_serial(port, baud_rate):
     try:
+        # Give the VEX Brain a moment to reset its serial connection after opening.
         ser = serial.Serial(port, baud_rate, timeout=1)
         time.sleep(2)
         print(f"Connected to VEX Brain on {port}")
@@ -62,12 +68,23 @@ def connect_serial(port, baud_rate):
 
 
 def classify_gesture(fingers):
+    # Convert cvzone's finger list into the same five-bit format the robot expects.
     pattern = "".join(map(str, fingers))
-    gesture_name = GESTURE_MAP.get(pattern, "UNKNOWN")
+    gesture_name = GESTURE_MAP.get(pattern)
+    if gesture_name is None and len(pattern) == 5:
+        open_fingers = [
+            FINGER_LABELS[index]
+            for index, state in enumerate(pattern)
+            if state == "1"
+        ]
+        gesture_name = "+".join(open_fingers) if open_fingers else "FIST"
+    if gesture_name is None:
+        gesture_name = "UNKNOWN"
     return pattern, gesture_name
 
 
 def send_command(ser, command):
+    # Skip serial writes when running without a connected robot.
     if command is None:
         return
 
@@ -79,13 +96,16 @@ def send_command(ser, command):
 
 
 def reset_unlock():
+    # Reset sequence progress and the gesture stability counters.
     return 0, None, 0
 
 
 def update_unlock(pattern, sequence_index, candidate_unlock_pattern, unlock_frames):
+    # Only advance the unlock sequence when the expected gesture stays stable.
     expected_pattern = UNLOCK_SEQUENCE[sequence_index][1]
 
     if pattern == expected_pattern:
+        # Count repeated frames of the same expected pattern to avoid false unlocks.
         if pattern == candidate_unlock_pattern:
             unlock_frames += 1
         else:
@@ -105,6 +125,7 @@ def update_unlock(pattern, sequence_index, candidate_unlock_pattern, unlock_fram
 
 def draw_status_panel(img, unlocked, pattern, gesture_name, last_sent_label, last_sent_command,
                       sequence_index, unlock_frames):
+    # Draw a fixed status panel over the camera image for live debugging.
     height, width = img.shape[:2]
     panel_left = max(0, width - 360)
     cv2.rectangle(img, (panel_left, 0), (width, height), (20, 25, 32), cv2.FILLED)
@@ -129,6 +150,7 @@ def draw_status_panel(img, unlocked, pattern, gesture_name, last_sent_label, las
     cv2.putText(img, "Unlock sequence", (panel_left + 24, y),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.58, (255, 255, 255), 1)
     y += 30
+    # Mark which unlock gestures are complete, current, or still waiting.
     for index, (name, unlock_pattern) in enumerate(UNLOCK_SEQUENCE):
         if unlocked or index < sequence_index:
             marker = "[x]"
@@ -146,6 +168,7 @@ def draw_status_panel(img, unlocked, pattern, gesture_name, last_sent_label, las
         y += 28
 
     if not unlocked:
+        # Show how long the current unlock gesture has been held steady.
         progress = min(1.0, unlock_frames / UNLOCK_STABLE_FRAMES_REQUIRED)
         cv2.rectangle(img, (panel_left + 24, y + 8), (width - 24, y + 20), (60, 70, 80), -1)
         cv2.rectangle(img, (panel_left + 24, y + 8),
@@ -192,6 +215,7 @@ def main():
     send_command(ser, "LOCK")
 
     while True:
+        # Read the newest webcam frame and stop cleanly if the camera disconnects.
         success, img = cap.read()
         if not success:
             print("Camera read failed.")
@@ -200,11 +224,13 @@ def main():
         hands, img = detector.findHands(img, draw=True)
 
         if hands:
+            # Use the first detected hand to produce a finger pattern.
             hand = hands[0]
             fingers = detector.fingersUp(hand)
             pattern, gesture_name = classify_gesture(fingers)
 
             if not unlocked:
+                # While locked, only look for the security gesture sequence.
                 sequence_index, candidate_unlock_pattern, unlock_frames = update_unlock(
                     pattern, sequence_index, candidate_unlock_pattern, unlock_frames
                 )
@@ -215,9 +241,11 @@ def main():
                     last_sent_label = "UNLOCKED"
 
             if gesture_name == "UNKNOWN" or not unlocked:
+                # Unknown or locked gestures should not be sent to the robot.
                 candidate_command = None
                 candidate_frames = 0
             else:
+                # Require a gesture to stay stable before sending a motor command.
                 if pattern == candidate_command:
                     candidate_frames += 1
                 else:
@@ -232,6 +260,7 @@ def main():
             draw_status_panel(img, unlocked, pattern, gesture_name, last_sent_label, last_sent_command,
                               sequence_index, unlock_frames)
         else:
+            # Losing the hand resets stability checks but keeps the current lock state.
             candidate_command = None
             candidate_frames = 0
             candidate_unlock_pattern = None
@@ -245,12 +274,14 @@ def main():
         if key == ord("q"):
             break
         if key == ord("l"):
+            # Manual lock immediately disables robot motor commands again.
             unlocked = False
             sequence_index, candidate_unlock_pattern, unlock_frames = reset_unlock()
             send_command(ser, "LOCK")
             last_sent_command = "LOCK"
             last_sent_label = "LOCKED"
         if key == ord("r"):
+            # Manual reset restarts the unlock sequence without changing lock state.
             sequence_index, candidate_unlock_pattern, unlock_frames = reset_unlock()
 
     cap.release()
