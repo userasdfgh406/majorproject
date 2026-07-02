@@ -46,11 +46,33 @@ def move_finger(finger_motor, finger_state):
         finger_motor.spin_to_position(MOTOR_POSITION_DOWN, DEGREES, False)
 
 
+def wait_for_motors(timeout_ms=3000):
+    """
+    Blocks execution until all motors have finished moving, or until
+    the safety timeout is reached.
+    """
+    elapsed = 0
+    while elapsed < timeout_ms:
+        all_done = True
+        for motor in motors:
+            if not motor.is_done():
+                all_done = False
+                break
+        if all_done:
+            break
+        wait(20, MSEC)
+        elapsed += 20
+
+
 def apply_pattern(pattern):
     global last_command
 
+    # Start moving all motors simultaneously (non-blocking trigger)
     for index in range(5):
         move_finger(motors[index], pattern[index])
+
+    # Wait until all motors physically reach their targets
+    wait_for_motors()
 
     wait(MOTOR_HOLD_MS, MSEC)
     last_command = pattern
